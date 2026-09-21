@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b57d0">
+  <title>MariBank / InstaPay Payment QR</title>
+
+  <!-- QR generator library. The page itself is free; this library is loaded from jsDelivr. -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f4f7fb;
+      color: #172033;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 24px 14px;
+    }
+    .wrap { width: 100%; max-width: 430px; }
+    .card {
+      background: #fff;
+      border-radius: 22px;
+      padding: 24px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.10);
+      text-align: center;
+    }
+    h1 { margin: 0 0 6px; font-size: 25px; }
+    .recipient { color: #667085; margin-bottom: 22px; }
+    label {
+      display: block;
+      text-align: left;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .amount-row {
+      display: flex;
+      align-items: center;
+      border: 2px solid #d0d5dd;
+      border-radius: 14px;
+      padding: 0 14px;
+      margin-bottom: 14px;
+      background: #fff;
+    }
+    .peso { font-size: 25px; font-weight: 700; }
+    #amount {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      font-size: 28px;
+      padding: 13px 8px;
+      text-align: right;
+      font-weight: 700;
+      background: transparent;
+    }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 14px;
+      padding: 15px;
+      background: #0b57d0;
+      color: #fff;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:active { transform: scale(.99); }
+    #qrcode {
+      margin: 22px auto 10px;
+      width: 260px;
+      min-height: 260px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #qrcode img, #qrcode canvas {
+      width: 260px !important;
+      height: 260px !important;
+      image-rendering: pixelated;
+    }
+    .amount-display {
+      font-size: 30px;
+      font-weight: 800;
+      margin-top: 4px;
+    }
+    .hint {
+      font-size: 13px;
+      line-height: 1.45;
+      color: #667085;
+      margin-top: 16px;
+    }
+    .status {
+      margin-top: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #0b57d0;
+      min-height: 20px;
+    }
+    .small {
+      font-size: 12px;
+      color: #98a2b3;
+      margin-top: 18px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Payment QR</h1>
+    <div class="recipient">PAUL ANTHONY C.</div>
+
+    <label for="amount">Enter amount</label>
+    <div class="amount-row">
+      <span class="peso">₱</span>
+      <input id="amount" inputmode="decimal" type="number"
+             min="0.01" step="0.01" placeholder="0.00"
+             autocomplete="off">
+    </div>
+
+    <button onclick="generatePaymentQR()">GENERATE PAYMENT QR</button>
+
+    <div id="qrcode"></div>
+    <div id="amountDisplay" class="amount-display"></div>
+    <div id="status" class="status"></div>
+
+    <div class="hint">
+      Customer scans this QR using a supported bank or e-wallet payment app.
+      Always check the recipient and amount shown in the customer's app before confirming payment.
+    </div>
+
+    <div class="small">
+      This page generates a QR payload from the recipient QR you supplied.
+      Compatibility with every bank/e-wallet app is not guaranteed.
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  Recipient payload decoded from the QR image supplied by the user:
+
+  00020101021127580012com.p2pqrpay0111LAUIPHM2XXX0208999644030411134168956855204601653036085802PH5915PAUL ANTHONY C.6009Pagsanjan63045232
+
+  The page converts the static payload into an amount-bearing payload by:
+  1) changing Point of Initiation Method 01 from 11 (static) to 12 (dynamic)
+  2) inserting EMV transaction amount field 54
+  3) recalculating CRC16-CCITT field 63
+*/
+
+const BASE_PAYLOAD =
+  "00020101021127580012com.p2pqrpay0111LAUIPHM2XXX0208999644030411134168956855204601653036085802PH5915PAUL ANTHONY C.6009Pagsanjan63045232";
+
+function tlv(id, value) {
+  return id + String(value.length).padStart(2, "0") + value;
+}
+
+function crc16ccitt(str) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= str.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      if (crc & 0x8000) {
+        crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+      } else {
+        crc = (crc << 1) & 0xFFFF;
+      }
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function buildDynamicPayload(amount) {
+  // Remove the existing CRC.
+  let body = BASE_PAYLOAD.slice(0, -8);
+
+  // Static 01 02 11 -> dynamic 01 02 12.
+  body = body.replace("010211", "010212");
+
+  // Insert transaction amount before country code (58).
+  // EMV MPM transaction amount is tag 54.
+  const amountText = Number(amount).toFixed(2);
+  const amountField = tlv("54", amountText);
+
+  const countryPos = body.indexOf("5802PH");
+  if (countryPos === -1) {
+    throw new Error("Could not locate the country-code field.");
+  }
+
+  body = body.slice(0, countryPos) + amountField + body.slice(countryPos);
+
+  // CRC field ID + length are included in the CRC calculation.
+  const crcInput = body + "6304";
+  const crc = crc16ccitt(crcInput);
+
+  return crcInput + crc;
+}
+
+function generatePaymentQR() {
+  const input = document.getElementById("amount");
+  const status = document.getElementById("status");
+  const amountDisplay = document.getElementById("amountDisplay");
+  const qr = document.getElementById("qrcode");
+
+  const value = Number(input.value);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    status.textContent = "Please enter an amount greater than ₱0.";
+    qr.innerHTML = "";
+    amountDisplay.textContent = "";
+    return;
+  }
+
+  if (value > 9999999999999) {
+    status.textContent = "Amount is too large.";
+    return;
+  }
+
+  try {
+    const payload = buildDynamicPayload(value);
+
+    qr.innerHTML = "";
+    new QRCode(qr, {
+      text: payload,
+      width: 260,
+      height: 260,
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    amountDisplay.textContent =
+      "₱" + value.toLocaleString("en-PH", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+
+    status.textContent = "QR generated — customer can scan it.";
+  } catch (e) {
+    status.textContent = "Could not generate the QR.";
+    console.error(e);
+  }
+}
+
+document.getElementById("amount").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") generatePaymentQR();
+});
+</script>
+</body>
+</html>
